@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState } from "react";
 
 interface JoystickProps {
   onDirectionChange: (direction: number) => void;
@@ -43,7 +43,7 @@ export default function Joystick({
     updateJoystickPosition(e);
   };
 
-  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handlePointerUp = () => {
     setIsDragging(false);
     setKnobPos({ x: 0, y: 0 });
     onDirectionChange(5); // Neutral
@@ -58,8 +58,8 @@ export default function Joystick({
     const centerY = rect.top + rect.height / 2;
 
     // Displacement
-    let dx = e.clientX - centerX;
-    let dy = e.clientY - centerY;
+    const dx = e.clientX - centerX;
+    const dy = e.clientY - centerY;
 
     const distance = Math.sqrt(dx * dx + dy * dy);
 
@@ -71,7 +71,7 @@ export default function Joystick({
     if (distance >= DEADZONE) {
       // Calculate angle in degrees: 0 is Right, 90 is Up, 180 is Left, 270 is Down
       // Note: dy is inverted because y goes down in standard screen space
-      let angleRad = Math.atan2(-dy, dx);
+      const angleRad = Math.atan2(-dy, dx);
       let angleDeg = angleRad * (180 / Math.PI);
       if (angleDeg < 0) {
         angleDeg += 360;

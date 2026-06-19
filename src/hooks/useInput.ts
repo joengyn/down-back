@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface InputState {
   direction: number; // Num-pad notation: 1-9 (5 is neutral)
@@ -73,6 +73,11 @@ export const DEFAULT_GAMEPAD_MAP = {
   start: 9, // Start / Options
 };
 
+type WindowWithWebkitAudio = Window &
+  typeof globalThis & {
+    webkitAudioContext?: typeof AudioContext;
+  };
+
 export function useInput() {
   const [currentInput, setCurrentInput] = useState<InputState>({
     direction: 5,
@@ -87,7 +92,6 @@ export function useInput() {
   });
 
   const [inputHistory, setInputHistory] = useState<InputHistoryItem[]>([]);
-  const [chargeAttempts, setChargeAttempts] = useState<ChargeAttempt[]>([]);
   const [activeGamepad, setActiveGamepad] = useState<string | null>(null);
   const [keyMap, setKeyMap] = useState<KeyMap>(DEFAULT_KEYMAP);
 
@@ -120,107 +124,230 @@ export function useInput() {
   const recordingBufferRef = useRef<InputHistoryItem[]>([]);
   const recordingActiveRef = useRef<boolean>(false);
 
-  // Charge tracking refs
-  const chargeBackFrames = useRef<number>(0);
-  const chargeDownFrames = useRef<number>(0);
-
-  const backChargeReleaseFrames = useRef<number>(0);
-  const downChargeReleaseFrames = useRef<number>(0);
-
-  const backChargeReleaseAmount = useRef<number>(0);
-  const downChargeReleaseAmount = useRef<number>(0);
-
-  const currentAttemptsRef = useRef<ChargeAttempt[]>([]);
-
   // Sound generation ref (using Web Audio API)
   const audioContextRef = useRef<AudioContext | null>(null);
 
-  // Play crisp metronome beep
-  const playBeep = (freq: number = 800, duration: number = 0.05) => {
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (
-          window.AudioContext || (window as any).webkitAudioContext
-        )();
-      }
-      const ctx = audioContextRef.current;
-      if (ctx.state === "suspended") {
-        ctx.resume();
-      }
-      const osc = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, ctx.currentTime);
-
-      gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
-      // Fast fade out to sound like arcade click
-      gainNode.gain.exponentialRampToValueAtTime(
-        0.0001,
-        ctx.currentTime + duration,
-      );
-
-      osc.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      osc.start();
-      osc.stop(ctx.currentTime + duration);
-    } catch (e) {
-      console.warn("AudioContext failed to trigger beep", e);
+  const getOrCreateAudioContext = useCallback((): AudioContext | null => {
+    if (typeof window === "undefined") {
+      return null;
     }
-  };
+
+    if (!audioContextRef.current) {
+      const audioContextConstructor =
+        window.AudioContext ??
+        (window as WindowWithWebkitAudio).webkitAudioContext;
+
+      if (!audioContextConstructor) {
+        return null;
+      }
+
+      audioContextRef.current = new audioContextConstructor();
+    }
+
+    return audioContextRef.current;
+  }, []);
+
+  // Play crisp metronome beep
+  const playBeep = useCallback(
+    (freq: number = 800, duration: number = 0.05) => {
+      try {
+        const ctx = getOrCreateAudioContext();
+        if (!ctx) {
+          return;
+        }
+
+        if (ctx.state === "suspended") {
+          void ctx.resume();
+        }
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+
+        gainNode.gain.setValueAtTime(0.08, ctx.currentTime);
+        // Fast fade out to sound like arcade click
+        gainNode.gain.exponentialRampToValueAtTime(
+          0.0001,
+          ctx.currentTime + duration,
+        );
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        osc.start();
+        osc.stop(ctx.currentTime + duration);
+      } catch (e) {
+        console.warn("AudioContext failed to trigger beep", e);
+      }
+    },
+    [getOrCreateAudioContext],
+  );
 
   // Play realistic mechanical microswitch click
-  const playClick = (isButton: boolean) => {
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (
-          window.AudioContext || (window as any).webkitAudioContext
-        )();
+  const playClick = useCallback(
+    (isButton: boolean) => {
+      try {
+        const ctx = getOrCreateAudioContext();
+        if (!ctx) {
+          return;
+        }
+
+        if (ctx.state === "suspended") {
+          void ctx.resume();
+        }
+        const now = ctx.currentTime;
+
+        // Synthesis values for crisp, high-pitched mechanical key switch clicks
+        // Card direction clicks are slightly higher pitch than action button clicks
+        const clickPitch1 = isButton ? 2600 : 3100;
+        const clickPitch2 = isButton ? 1600 : 2000;
+
+        // Leaf-spring high snap
+        const osc1 = ctx.createOscillator();
+        const gain1 = ctx.createGain();
+        osc1.type = "sine";
+        osc1.frequency.setValueAtTime(clickPitch1, now);
+
+        // Housing impact resonance
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.type = "triangle";
+        osc2.frequency.setValueAtTime(clickPitch2, now);
+
+        // High-pass crisp transient envelopes (8ms and 15ms decays)
+        gain1.gain.setValueAtTime(0.04, now);
+        gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.008);
+
+        gain2.gain.setValueAtTime(0.02, now);
+        gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.015);
+
+        osc1.connect(gain1);
+        gain1.connect(ctx.destination);
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+
+        osc1.start(now);
+        osc1.stop(now + 0.01);
+        osc2.start(now);
+        osc2.stop(now + 0.02);
+      } catch (e) {
+        console.warn("AudioContext failed to trigger switch sound", e);
       }
-      const ctx = audioContextRef.current;
-      if (ctx.state === "suspended") {
-        ctx.resume();
+    },
+    [getOrCreateAudioContext],
+  );
+
+  // Function to process state updates frame by frame
+  const processInputState = useCallback(
+    (newState: InputState, frameTicks: number) => {
+      const prevState = lastStateRef.current;
+
+      // Check if the input state is identical to the previous frame
+      const isDirectionSame = prevState.direction === newState.direction;
+      const isButtonsSame =
+        prevState.lp === newState.lp &&
+        prevState.mp === newState.mp &&
+        prevState.hp === newState.hp &&
+        prevState.lk === newState.lk &&
+        prevState.mk === newState.mk &&
+        prevState.hk === newState.hk &&
+        prevState.select === newState.select &&
+        prevState.start === newState.start;
+
+      const stateChanged = !isDirectionSame || !isButtonsSame;
+
+      // Detect button press transitions (used for gap and link timing analysis)
+      const buttonTransitions = {
+        lp: !prevState.lp && newState.lp,
+        mp: !prevState.mp && newState.mp,
+        hp: !prevState.hp && newState.hp,
+        lk: !prevState.lk && newState.lk,
+        mk: !prevState.mk && newState.mk,
+        hk: !prevState.hk && newState.hk,
+      };
+
+      if (stateChanged) {
+        // Gather active buttons list
+        const activeBtns: string[] = [];
+        if (newState.lp) activeBtns.push("LP");
+        if (newState.mp) activeBtns.push("MP");
+        if (newState.hp) activeBtns.push("HP");
+        if (newState.lk) activeBtns.push("LK");
+        if (newState.mk) activeBtns.push("MK");
+        if (newState.hk) activeBtns.push("HK");
+        if (newState.select) activeBtns.push("SEL");
+        if (newState.start) activeBtns.push("ST");
+
+        const newItem: InputHistoryItem = {
+          id: Math.random().toString(36).substring(2, 9),
+          direction: newState.direction,
+          buttons: activeBtns,
+          frames: frameTicks,
+          ms: Math.round(frameTicks * (1000 / 60)),
+          timestamp: Date.now(),
+        };
+
+        // Play soft arcade feedback click on new button press or direction change
+        const hasNewButtonPress =
+          Object.values(buttonTransitions).some(Boolean);
+
+        if (hasNewButtonPress) {
+          playClick(true);
+        } else if (
+          prevState.direction !== newState.direction &&
+          newState.direction !== 5
+        ) {
+          playClick(false);
+        }
+        // Update Input History (keep last 80 items to avoid lagging)
+        const updatedHistory = [newItem, ...currentHistoryRef.current].slice(
+          0,
+          80,
+        );
+        currentHistoryRef.current = updatedHistory;
+        setInputHistory(updatedHistory);
+
+        // If combo recording is active, append to recording buffer
+        if (recordingActiveRef.current) {
+          recordingBufferRef.current = [...recordingBufferRef.current, newItem];
+        }
+
+        setCurrentInput(newState);
+      } else {
+        // If same state, increment frame duration of the current top item in history
+        if (currentHistoryRef.current.length > 0) {
+          const updated = [...currentHistoryRef.current];
+          updated[0] = {
+            ...updated[0],
+            frames: updated[0].frames + frameTicks,
+            ms: Math.round((updated[0].frames + frameTicks) * (1000 / 60)),
+          };
+          currentHistoryRef.current = updated;
+          setInputHistory(updated);
+
+          // Also update recording buffer top item
+          if (
+            recordingActiveRef.current &&
+            recordingBufferRef.current.length > 0
+          ) {
+            const recBuf = [...recordingBufferRef.current];
+            recBuf[recBuf.length - 1] = {
+              ...recBuf[recBuf.length - 1],
+              frames: recBuf[recBuf.length - 1].frames + frameTicks,
+              ms: Math.round(
+                (recBuf[recBuf.length - 1].frames + frameTicks) * (1000 / 60),
+              ),
+            };
+            recordingBufferRef.current = recBuf;
+          }
+        }
       }
-      const now = ctx.currentTime;
 
-      // Synthesis values for crisp, high-pitched mechanical key switch clicks
-      // Card direction clicks are slightly higher pitch than action button clicks
-      const clickPitch1 = isButton ? 2600 : 3100;
-      const clickPitch2 = isButton ? 1600 : 2000;
-
-      // Leaf-spring high snap
-      const osc1 = ctx.createOscillator();
-      const gain1 = ctx.createGain();
-      osc1.type = "sine";
-      osc1.frequency.setValueAtTime(clickPitch1, now);
-
-      // Housing impact resonance
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.type = "triangle";
-      osc2.frequency.setValueAtTime(clickPitch2, now);
-
-      // High-pass crisp transient envelopes (8ms and 15ms decays)
-      gain1.gain.setValueAtTime(0.04, now);
-      gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.008);
-
-      gain2.gain.setValueAtTime(0.02, now);
-      gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.015);
-
-      osc1.connect(gain1);
-      gain1.connect(ctx.destination);
-      osc2.connect(gain2);
-      gain2.connect(ctx.destination);
-
-      osc1.start(now);
-      osc1.stop(now + 0.01);
-      osc2.start(now);
-      osc2.stop(now + 0.02);
-    } catch (e) {
-      console.warn("AudioContext failed to trigger switch sound", e);
-    }
-  };
+      lastStateRef.current = newState;
+    },
+    [playClick],
+  );
 
   // Keyboard Event Listeners
   useEffect(() => {
@@ -397,181 +524,7 @@ export function useInput() {
         cancelAnimationFrame(animationFrameId.current);
       }
     };
-  }, [keyMap]);
-
-  // Function to process state updates frame by frame
-  const processInputState = (newState: InputState, frameTicks: number) => {
-    const prevState = lastStateRef.current;
-
-    // Check if the input state is identical to the previous frame
-    const isDirectionSame = prevState.direction === newState.direction;
-    const isButtonsSame =
-      prevState.lp === newState.lp &&
-      prevState.mp === newState.mp &&
-      prevState.hp === newState.hp &&
-      prevState.lk === newState.lk &&
-      prevState.mk === newState.mk &&
-      prevState.hk === newState.hk &&
-      prevState.select === newState.select &&
-      prevState.start === newState.start;
-
-    const stateChanged = !isDirectionSame || !isButtonsSame;
-
-    // Detect button press transitions (used for gap and link timing analysis)
-    const buttonTransitions = {
-      lp: !prevState.lp && newState.lp,
-      mp: !prevState.mp && newState.mp,
-      hp: !prevState.hp && newState.hp,
-      lk: !prevState.lk && newState.lk,
-      mk: !prevState.mk && newState.mk,
-      hk: !prevState.hk && newState.hk,
-    };
-
-    const buttonReleases = {
-      lp: prevState.lp && !newState.lp,
-      mp: prevState.mp && !newState.mp,
-      hp: prevState.hp && !newState.hp,
-      lk: prevState.lk && !newState.lk,
-      mk: prevState.mk && !newState.mk,
-      hk: prevState.hk && !newState.hk,
-    };
-
-    // Log release times for buttons
-    const now = performance.now();
-    Object.entries(buttonReleases).forEach(([btn, released]) => {
-      if (released) {
-        buttonReleaseTimes.current[btn] = now;
-      }
-    });
-
-    // Check for gaps / link timing on press transitions
-    Object.entries(buttonTransitions).forEach(([btn, pressed]) => {
-      if (pressed) {
-        // Find if any button was recently released
-        Object.entries(buttonReleaseTimes.current).forEach(
-          ([prevBtn, releaseTime]) => {
-            // If released within 500ms
-            const elapsedMs = now - releaseTime;
-            if (elapsedMs > 0 && elapsedMs < 500) {
-              const gapFrames = Math.round(elapsedMs / (1000 / 60));
-              // Categorize the gap: 0 frames = cancel (same frame/special cancel), 1-3 = tight link, 4-7 = normal link, >7 = slow/drop
-              let type: "link" | "cancel" | "slow" = "slow";
-              if (gapFrames === 0) {
-                type = "cancel";
-              } else if (gapFrames <= 3) {
-                type = "link";
-              } else if (gapFrames <= 7) {
-                type = "link"; // normal link
-              }
-
-              const newGap: GapAnalyzerItem = {
-                id: Math.random().toString(36).substring(2, 9),
-                fromButton: prevBtn.toUpperCase(),
-                toButton: btn.toUpperCase(),
-                gapFrames,
-                gapMs: Math.round(elapsedMs),
-                type,
-                timestamp: Date.now(),
-              };
-
-              const updatedGaps = [newGap, ...currentGapsRef.current].slice(
-                0,
-                30,
-              );
-              currentGapsRef.current = updatedGaps;
-              setGapAnalyzerList(updatedGaps);
-            }
-          },
-        );
-      }
-    });
-
-    if (stateChanged) {
-      // Gather active buttons list
-      const activeBtns: string[] = [];
-      if (newState.lp) activeBtns.push("LP");
-      if (newState.mp) activeBtns.push("MP");
-      if (newState.hp) activeBtns.push("HP");
-      if (newState.lk) activeBtns.push("LK");
-      if (newState.mk) activeBtns.push("MK");
-      if (newState.hk) activeBtns.push("HK");
-      if (newState.select) activeBtns.push("SEL");
-      if (newState.start) activeBtns.push("ST");
-
-      const newItem: InputHistoryItem = {
-        id: Math.random().toString(36).substring(2, 9),
-        direction: newState.direction,
-        buttons: activeBtns,
-        frames: frameTicks,
-        ms: Math.round(frameTicks * (1000 / 60)),
-        timestamp: Date.now(),
-      };
-
-      // Play soft arcade feedback click on new button press or direction change
-      if (
-        activeBtns.length > prevState.buttons?.length ||
-        (!prevState.lp &&
-          !prevState.mp &&
-          !prevState.hp &&
-          !prevState.lk &&
-          !prevState.mk &&
-          !prevState.hk &&
-          activeBtns.length > 0)
-      ) {
-        playClick(true);
-      } else if (
-        prevState.direction !== newState.direction &&
-        newState.direction !== 5
-      ) {
-        playClick(false);
-      }
-
-      // Update Input History (keep last 80 items to avoid lagging)
-      const updatedHistory = [newItem, ...currentHistoryRef.current].slice(
-        0,
-        80,
-      );
-      currentHistoryRef.current = updatedHistory;
-      setInputHistory(updatedHistory);
-
-      // If combo recording is active, append to recording buffer
-      if (recordingActiveRef.current) {
-        recordingBufferRef.current = [...recordingBufferRef.current, newItem];
-      }
-
-      setCurrentInput(newState);
-    } else {
-      // If same state, increment frame duration of the current top item in history
-      if (currentHistoryRef.current.length > 0) {
-        const updated = [...currentHistoryRef.current];
-        updated[0] = {
-          ...updated[0],
-          frames: updated[0].frames + frameTicks,
-          ms: Math.round((updated[0].frames + frameTicks) * (1000 / 60)),
-        };
-        currentHistoryRef.current = updated;
-        setInputHistory(updated);
-
-        // Also update recording buffer top item
-        if (
-          recordingActiveRef.current &&
-          recordingBufferRef.current.length > 0
-        ) {
-          const recBuf = [...recordingBufferRef.current];
-          recBuf[recBuf.length - 1] = {
-            ...recBuf[recBuf.length - 1],
-            frames: recBuf[recBuf.length - 1].frames + frameTicks,
-            ms: Math.round(
-              (recBuf[recBuf.length - 1].frames + frameTicks) * (1000 / 60),
-            ),
-          };
-          recordingBufferRef.current = recBuf;
-        }
-      }
-    }
-
-    lastStateRef.current = newState;
-  };
+  }, [keyMap, processInputState]);
 
   const clearHistory = () => {
     currentHistoryRef.current = [];
