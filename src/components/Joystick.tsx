@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 interface JoystickProps {
   onDirectionChange: (direction: number) => void;
@@ -14,9 +14,11 @@ export default function Joystick({
   const containerRef = useRef<HTMLDivElement>(null);
   const [dragKnobPos, setDragKnobPos] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
+  const [containerSize, setContainerSize] = useState(224);
 
-  const MAX_RADIUS = 64; // Max pixels the knob can move from center
-  const DEADZONE = 36; // Pixels from center before register direction
+  const MAX_RADIUS = containerSize * 0.25;
+  const DEADZONE = containerSize * 0.14;
+  const knobSize = containerSize * 0.3125;
 
   const getKnobPositionForDirection = (direction: number) => {
     const diagonalOffset = MAX_RADIUS * 0.7071;
@@ -42,6 +44,29 @@ export default function Joystick({
         return { x: 0, y: 0 };
     }
   };
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const updateSize = () => {
+      setContainerSize(element.getBoundingClientRect().width);
+    };
+
+    updateSize();
+
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -115,7 +140,11 @@ export default function Joystick({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        className="relative flex h-64 w-64 items-center justify-center cursor-pointer select-none touch-none bg-transparent sm:h-72 sm:w-72"
+        className="relative flex items-center justify-center cursor-pointer select-none touch-none bg-transparent"
+        style={{
+          width: "clamp(11rem, 42vw, 18rem)",
+          height: "clamp(11rem, 42vw, 18rem)",
+        }}
       >
         <svg
           className="absolute inset-0 h-full w-full pointer-events-none"
@@ -134,10 +163,12 @@ export default function Joystick({
         />
 
         <div
-          className={`absolute h-20 w-20 rounded-full border-4 border-black bg-white select-none pointer-events-none transition-transform shadow-md sm:h-24 sm:w-24 ${
+          className={`absolute rounded-full border-4 border-black bg-white select-none pointer-events-none transition-transform shadow-md ${
             isDragging ? "scale-105 shadow-lg" : ""
           }`}
           style={{
+            width: knobSize,
+            height: knobSize,
             transform: `translate(${knobPos.x}px, ${knobPos.y}px)`,
           }}
         />

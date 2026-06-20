@@ -26,7 +26,7 @@ function DirectionIcon({ direction }: { direction: number }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-5 w-5"
+      className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6"
       aria-hidden="true"
       style={{ transform: `rotate(${rotation}deg)` }}
     >
@@ -44,17 +44,29 @@ function DirectionIcon({ direction }: { direction: number }) {
 
 export default function InputHistory({ inputHistory }: InputHistoryProps) {
   return (
-    <div className="flex w-12 shrink-0 flex-col items-start text-left">
-      <div className="flex w-full flex-col gap-2">
+    <div className="flex w-full justify-center text-left">
+      <div className="flex flex-row gap-1.5 sm:gap-2 md:gap-3">
         {inputHistory.length === 0 ? (
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-400">
+          <div
+            className="flex shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-400"
+            style={{
+              width: "clamp(2rem, 6vw, 2.75rem)",
+              height: "clamp(2rem, 6vw, 2.75rem)",
+            }}
+          >
             <DirectionIcon direction={5} />
           </div>
         ) : (
-          inputHistory.slice(0, 6).map((item) => (
+          inputHistory.slice(0, 3).map((item, index) => (
             <div
               key={item.id}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700"
+              className={`flex shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-700 ${
+                index === 0 ? "opacity-100" : "opacity-45"
+              }`}
+              style={{
+                width: "clamp(2rem, 6vw, 2.75rem)",
+                height: "clamp(2rem, 6vw, 2.75rem)",
+              }}
             >
               <DirectionIcon direction={item.direction} />
             </div>
